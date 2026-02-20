@@ -31,6 +31,12 @@ image-resizer/
 └── styles.css
 ```
 
+**TIP:** If you want to rename the Adobe Stock file before resizing make sure you have `Ask where to save each file before downloading` turned on in your relevant browser.
+- Chrome: `chrome://settings/downloads`
+- Brave: `brave://settings/downloads`
+- Edge: `edge://settings/downloads`
+- Safari: need a safari user
+
 1. **Pick a size** — choose a preset or enter custom dimensions and hit Apply
 2. **Load images** — drag & drop or click to browse. Adding more images while some are loaded will ask whether to replace or add
 3. **Adjust crop anchors** — hover any card to reveal the 3×3 picker in the corner. Dimmed dots mean that axis has no slack (the image already fills it completely)
