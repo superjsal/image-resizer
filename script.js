@@ -37,6 +37,7 @@ const steps = [
 let images        = [];
 let activeSize    = { w: 1200, h: 628 };
 let activeQuality = 0.92;
+let activeFormat  = { mime: "image/jpeg", ext: "jpg" };
 let selectedIndex = 0;
 let isExporting   = false;
 let pendingFiles  = null;
@@ -220,7 +221,7 @@ function drawCropped(bitmap, w, h, targetCtx, targetCanvas, anchor = DEFAULT_ANC
 async function bitmapToObjectURL(bitmap, w, h, quality, anchor = DEFAULT_ANCHOR) {
   const off = document.createElement("canvas");
   drawCropped(bitmap, w, h, off.getContext("2d"), off, anchor);
-  const blob = await new Promise(r => off.toBlob(r, "image/jpeg", quality));
+  const blob = await new Promise(r => off.toBlob(r, activeFormat.mime, activeFormat.mime === "image/png" ? undefined : quality));
   return blob ? URL.createObjectURL(blob) : null;
 }
 
@@ -384,7 +385,7 @@ async function renderGrid() {
     const dlBtn = document.createElement("a");
     dlBtn.className      = "card-dl-btn";
     dlBtn.href           = url;
-    dlBtn.download       = cleanName(item.name) + ".jpg";
+    dlBtn.download       = cleanName(item.name) + "." + activeFormat.ext;
     dlBtn.dataset.objurl = "1";
     dlBtn.innerHTML      = svgDownload + " Save";
 
@@ -569,35 +570,31 @@ fileInput.addEventListener("change", e => {
   fileInput.value = "";
 });
 
-dropZone.addEventListener("click", () => fileInput.click());
-
-// Use a counter instead of relying on dragleave alone — dragleave fires when
-// moving over child elements and also never fires if you release outside the window.
-let dragDepth = 0;
-
-dropZone.addEventListener("dragenter", e => {
-  e.preventDefault();
-  dragDepth++;
-  dropZone.classList.add("drag");
-});
-dropZone.addEventListener("dragover", e => { e.preventDefault(); });
-dropZone.addEventListener("dragleave", () => {
-  dragDepth--;
-  if (dragDepth <= 0) { dragDepth = 0; dropZone.classList.remove("drag"); }
-});
+dropZone.addEventListener("click",    () => fileInput.click());
+dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("drag"); });
+dropZone.addEventListener("dragleave", ()  => dropZone.classList.remove("drag"));
 dropZone.addEventListener("drop", e => {
   e.preventDefault();
-  dragDepth = 0;
   dropZone.classList.remove("drag");
   if (e.dataTransfer?.files?.length) handleFileInput(e.dataTransfer.files);
 });
 
-// Safety net: if user drags out of the window entirely, dragend never fires on
-// the drop zone but the document gets a dragleave — clear the state then.
-document.addEventListener("dragleave", e => {
-  if (e.relatedTarget === null) { dragDepth = 0; dropZone.classList.remove("drag"); }
-});
 
+// ── Format selector ──────────────────────────────────────────────────────────
+const formatHints = {
+  "image/jpeg": "Smaller file, good for photos",
+  "image/png":  "Larger file size, not recommended unless client specifies",
+  "image/webp": "Best compression, modern browsers"
+};
+document.querySelectorAll(".format-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".format-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    activeFormat = { mime: "image/" + btn.dataset.format, ext: btn.dataset.ext };
+    document.getElementById("formatHint").textContent = formatHints[activeFormat.mime];
+    if (images.length) renderGrid();
+  });
+});
 downloadBtn.addEventListener("click", downloadAll);
 
 const isMac = navigator.platform.toUpperCase().includes("MAC");
