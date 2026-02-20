@@ -39,7 +39,11 @@ image-resizer/
 Ideally best used as a Sidebar if doing a lot of Blogs. You can just use the Recent Download History to drag the downloaded images over from the SEOTOOL tab over to the resizer tab. I like to save adobe stock images as the file name LP wants first.
 
 
-=======
+**Some Pain Points**
+1. Since this app cannot delete the original image we'll need to overwrite the original image or have them go to a separate folder.
+2. Since this is a web based app, for security reasons I am unable to define an output folder for these images so we need to go back and forth between 2 folders.
+
+A minor annoyance but if anyone has any suggestions, let me know!
 
 ---
 
