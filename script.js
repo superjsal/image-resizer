@@ -24,6 +24,7 @@ const choiceAdd     = document.getElementById("choiceAdd");
 const choiceCancel  = document.getElementById("choiceCancel");
 const kbdHint       = document.getElementById("kbdHint");
 const qualityHint   = document.getElementById("qualityHint");
+const recentSizes   = document.getElementById("recentSizes");
 const themeToggle   = document.getElementById("themeToggle");
 const ctx           = canvas.getContext("2d");
 
@@ -128,6 +129,61 @@ function loadPrefs() {
     const fmt = JSON.parse(localStorage.getItem("resizer-format"));
     if (fmt?.mime && fmt?.ext) activeFormat = fmt;
   } catch {}
+}
+
+
+// --- Recent custom sizes ---
+
+const MAX_RECENTS = 3;
+
+function loadRecents() {
+  try {
+    return JSON.parse(localStorage.getItem("resizer-recents")) || [];
+  } catch { return []; }
+}
+
+function saveRecentSize(w, h) {
+  let recents = loadRecents();
+  // Remove any existing entry with the same dimensions, then prepend
+  recents = recents.filter(r => !(r.w === w && r.h === h));
+  recents.unshift({ w, h });
+  recents = recents.slice(0, MAX_RECENTS);
+  try { localStorage.setItem("resizer-recents", JSON.stringify(recents)); } catch {}
+  renderRecentSizes();
+}
+
+function renderRecentSizes() {
+  const recents = loadRecents();
+  recentSizes.style.display = recents.length ? "flex" : "none";
+  recentSizes.innerHTML = "";
+
+  recents.forEach(({ w, h }) => {
+    const pill = document.createElement("button");
+    pill.className   = "recent-pill";
+    pill.textContent = `${w} × ${h}`;
+    pill.title       = `Apply ${w} × ${h}`;
+    pill.addEventListener("click", () => {
+      widthInput.value  = w;
+      heightInput.value = h;
+      clearInputError();
+      setActivePreset(null);
+      applySizeChange(w, h);
+    });
+
+    const del = document.createElement("span");
+    del.className   = "recent-pill-del";
+    del.textContent = "×";
+    del.title       = "Remove";
+    del.addEventListener("click", e => {
+      e.stopPropagation();
+      let recents = loadRecents().filter(r => !(r.w === w && r.h === h));
+      try { localStorage.setItem("resizer-recents", JSON.stringify(recents)); } catch {}
+      renderRecentSizes();
+    });
+
+    pill.appendChild(del);
+    recentSizes.appendChild(pill);
+  });
 }
 
 
@@ -243,7 +299,8 @@ async function updatePreview() {
   drawCropped(item.bitmap, activeSize.w, activeSize.h, ctx, canvas, item.cropAnchor);
   canvas.style.opacity = "1";
   canvasEmpty.classList.add("hidden");
-  canvasBadge.textContent = `${activeSize.w} × ${activeSize.h}`;
+  renderRecentSizes();
+canvasBadge.textContent = `${activeSize.w} × ${activeSize.h}`;
   canvasBadge.classList.add("visible");
 
   await renderGrid();
@@ -544,6 +601,7 @@ customBtn.addEventListener("click", () => {
   clearInputError();
   setActivePreset(null);
   applySizeChange(w, h);
+  saveRecentSize(w, h);
 });
 
 [widthInput, heightInput].forEach(el => {
@@ -674,6 +732,7 @@ if (!presetRestored) {
   heightInput.value = activeSize.h;
 }
 
+renderRecentSizes();
 canvasBadge.textContent = `${activeSize.w} × ${activeSize.h}`;
 setStep(1);
 setStatus("Choose a size, then load your images.");
