@@ -17,6 +17,8 @@ A lightweight, browser-based tool for resizing and exporting images in bulk for 
 - **Download All** — exports every image at once (`Ctrl+Shift+D` / `⌘⇧D`)
 - **Light & dark mode** — persists across sessions via localStorage
 - **Remembers your settings** — last used size and quality are restored on next visit
+- **Last used Custom Sizes persist** - Stores up to 3
+- **Different formats** - JPG, PNG, and WebP. JPG should be the default for most scenarios.
 
 ---
 
