@@ -113,6 +113,7 @@ function savePrefs() {
   try {
     localStorage.setItem("resizer-size",    JSON.stringify(activeSize));
     localStorage.setItem("resizer-quality", String(activeQuality));
+    localStorage.setItem("resizer-format",  JSON.stringify(activeFormat));
   } catch {}
 }
 
@@ -123,6 +124,9 @@ function loadPrefs() {
 
     const q = parseFloat(localStorage.getItem("resizer-quality"));
     if (!isNaN(q)) activeQuality = q;
+
+    const fmt = JSON.parse(localStorage.getItem("resizer-format"));
+    if (fmt?.mime && fmt?.ext) activeFormat = fmt;
   } catch {}
 }
 
@@ -312,7 +316,9 @@ async function refreshCard(imageIndex) {
   if (card) {
     const thumb = card.querySelector("canvas");
     if (thumb) {
-      drawCropped(item.bitmap, w, h, thumb.getContext("2d"), thumb, item.cropAnchor);
+      const tW = thumb.offsetWidth || 160;
+      const tH = Math.round(tW * (h / w));
+      drawCropped(item.bitmap, tW, tH, thumb.getContext("2d"), thumb, item.cropAnchor);
     }
 
     // Revoke old blob and bake a new one
@@ -339,6 +345,7 @@ async function renderGrid() {
 
   const { w, h } = activeSize;
 
+  const pendingBtns = [];
   for (let i = 0; i < images.length; i++) {
     const item = images[i];
     const wrap = document.createElement("div");
@@ -354,10 +361,9 @@ async function renderGrid() {
     thumbWrap.className = "thumb-wrap";
 
     const thumb  = document.createElement("canvas");
-    const scale  = 160 / w;
-    thumb.width  = Math.round(w * scale);
-    thumb.height = Math.round(h * scale);
-    drawCropped(item.bitmap, w, h, thumb.getContext("2d"), thumb, item.cropAnchor);
+    const thumbW = 160;
+    const thumbH = Math.round(h * (160 / w));
+    drawCropped(item.bitmap, thumbW, thumbH, thumb.getContext("2d"), thumb, item.cropAnchor);
 
     const overlay = document.createElement("div");
     overlay.className   = "thumb-overlay";
@@ -381,12 +387,12 @@ async function renderGrid() {
 
     info.append(nameEl, dimsEl);
 
-    const url   = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
     const dlBtn = document.createElement("a");
     dlBtn.className      = "card-dl-btn";
-    dlBtn.href           = url;
+    dlBtn.href           = "#";
     dlBtn.download       = cleanName(item.name) + "." + activeFormat.ext;
     dlBtn.dataset.objurl = "1";
+    dlBtn.dataset.imgIdx = String(i);
     dlBtn.innerHTML      = svgDownload + " Save";
 
     dlBtn.addEventListener("click", () => {
@@ -400,9 +406,17 @@ async function renderGrid() {
       }, 200);
     });
 
+    pendingBtns.push(dlBtn);
     wrap.append(removeBtn, thumbWrap, info, dlBtn);
     previewGrid.appendChild(wrap);
   }
+
+  // Encode all blobs in parallel — much faster with multiple images
+  await Promise.all(pendingBtns.map(async btn => {
+    const item = images[parseInt(btn.dataset.imgIdx)];
+    const url  = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
+    if (url) btn.href = url;
+  }));
 }
 
 
@@ -570,14 +584,19 @@ fileInput.addEventListener("change", e => {
   fileInput.value = "";
 });
 
-dropZone.addEventListener("click",    () => fileInput.click());
-dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("drag"); });
-dropZone.addEventListener("dragleave", ()  => dropZone.classList.remove("drag"));
+dropZone.addEventListener("click", () => fileInput.click());
+
+let dragDepth = 0;
+dropZone.addEventListener("dragenter", e => { e.preventDefault(); dragDepth++; dropZone.classList.add("drag"); });
+dropZone.addEventListener("dragover",  e => { e.preventDefault(); });
+dropZone.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; dropZone.classList.remove("drag"); } });
 dropZone.addEventListener("drop", e => {
   e.preventDefault();
+  dragDepth = 0;
   dropZone.classList.remove("drag");
   if (e.dataTransfer?.files?.length) handleFileInput(e.dataTransfer.files);
 });
+document.addEventListener("dragleave", e => { if (!e.relatedTarget) { dragDepth = 0; dropZone.classList.remove("drag"); } });
 
 
 // ── Format selector ──────────────────────────────────────────────────────────
@@ -592,12 +611,13 @@ document.querySelectorAll(".format-btn").forEach(btn => {
     btn.classList.add("active");
     activeFormat = { mime: "image/" + btn.dataset.format, ext: btn.dataset.ext };
     document.getElementById("formatHint").textContent = formatHints[activeFormat.mime];
+    savePrefs();
     if (images.length) renderGrid();
   });
 });
 downloadBtn.addEventListener("click", downloadAll);
 
-const isMac = navigator.platform.toUpperCase().includes("MAC");
+const isMac = (navigator.userAgentData?.platform ?? navigator.platform ?? "").toUpperCase().includes("MAC");
 kbdHint.textContent = isMac ? "⌘⇧D" : "Ctrl+Shift+D";
 
 document.addEventListener("keydown", e => {
@@ -628,6 +648,16 @@ document.querySelectorAll(".quality-btn").forEach(btn => {
   const match = parseFloat(btn.dataset.quality) === activeQuality;
   btn.classList.toggle("active", match);
   if (match) qualityHint.textContent = qualityHints[btn.dataset.quality];
+});
+
+// Restore format button active state from saved prefs
+document.querySelectorAll(".format-btn").forEach(btn => {
+  const match = "image/" + btn.dataset.format === activeFormat.mime;
+  btn.classList.toggle("active", match);
+  if (match) {
+    const hint = document.getElementById("formatHint");
+    if (hint) hint.textContent = formatHints[activeFormat.mime];
+  }
 });
 
 let presetRestored = false;
