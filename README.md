@@ -53,7 +53,7 @@ In `index.html`, copy any `seg-btn` and set the `data-size` attribute:
 
 ```html
 <button class="seg-btn" data-size="1200x675">
-  <span class="seg-label">1080 × 1080</span>
+  <span class="seg-label">1200 × 675</span>
   <span class="seg-hint">Florida Villager</span>
 </button>
 ```
