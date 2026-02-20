@@ -89,5 +89,4 @@ Works in any modern browser that supports the Canvas API and `createImageBitmap`
 - Vanilla JS (no frameworks)
 - Canvas API for image processing
 - [Lucide](https://lucide.dev) for icons (loaded via CDN)
-- Inter via Google Fonts
 - localStorage for persisting preferences
