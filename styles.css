@@ -27,8 +27,6 @@
   --sage-dim:  rgba(122,171,128,0.14);
   --red:       #e05548;
   --red-dim:   rgba(224,85,72,0.10);
-  --yellow:    #e09840;
-  --yellow-dim: rgba(224,152,64,0.14);
 
   --radius-sm: 8px;
   --radius-xs: 5px;
@@ -68,8 +66,6 @@ body.light {
   --sage-dim:  rgba(78,112,83,0.12);
   --red:       #b83228;
   --red-dim:   rgba(184,50,40,0.08);
-  --yellow:    #b8721a;
-  --yellow-dim: rgba(184,114,26,0.12);
 
   --shadow-card:  0 1px 0 rgba(255,255,255,0.75), 0 2px 6px rgba(80,50,20,0.08);
   --shadow-inset: inset 0 1px 3px rgba(80,50,20,0.07);
@@ -438,7 +434,7 @@ body.light .theme-toggle .icon-sun  { display: block; }
 .btn-choice-replace { background: var(--red-dim); border-color: var(--red); color: var(--red); }
 .btn-choice-replace:hover { background: var(--red-dim); filter: brightness(1.15); }
 .btn-choice-add    { background: var(--amber-dim); border-color: var(--amber-ring); color: var(--amber); }
-.btn-choice-add:hover { background: var(--amber-dim); }
+.btn-choice-add:hover { background: var(--amber-dim); filter: brightness(1.15); }
 .btn-choice-cancel { background: var(--surface-3); border-color: var(--border-mid); color: var(--text-2); }
 .btn-choice-cancel:hover { background: var(--surface-2); }
 
@@ -530,7 +526,7 @@ body.light .theme-toggle .icon-sun  { display: block; }
   transition: background 0.2s, box-shadow 0.2s;
 }
 .status-dot.active { background: var(--sage); box-shadow: 0 0 6px var(--sage); }
-.status-dot.busy   { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+.status-dot.busy   { background: var(--amber);  box-shadow: 0 0 6px var(--amber); }
 
 @keyframes statusIn {
   from { opacity: 0.3; transform: translateY(1px); }
