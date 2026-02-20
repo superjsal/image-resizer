@@ -569,13 +569,33 @@ fileInput.addEventListener("change", e => {
   fileInput.value = "";
 });
 
-dropZone.addEventListener("click",    () => fileInput.click());
-dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("drag"); });
-dropZone.addEventListener("dragleave", ()  => dropZone.classList.remove("drag"));
+dropZone.addEventListener("click", () => fileInput.click());
+
+// Use a counter instead of relying on dragleave alone — dragleave fires when
+// moving over child elements and also never fires if you release outside the window.
+let dragDepth = 0;
+
+dropZone.addEventListener("dragenter", e => {
+  e.preventDefault();
+  dragDepth++;
+  dropZone.classList.add("drag");
+});
+dropZone.addEventListener("dragover", e => { e.preventDefault(); });
+dropZone.addEventListener("dragleave", () => {
+  dragDepth--;
+  if (dragDepth <= 0) { dragDepth = 0; dropZone.classList.remove("drag"); }
+});
 dropZone.addEventListener("drop", e => {
   e.preventDefault();
+  dragDepth = 0;
   dropZone.classList.remove("drag");
   if (e.dataTransfer?.files?.length) handleFileInput(e.dataTransfer.files);
+});
+
+// Safety net: if user drags out of the window entirely, dragend never fires on
+// the drop zone but the document gets a dragleave — clear the state then.
+document.addEventListener("dragleave", e => {
+  if (e.relatedTarget === null) { dragDepth = 0; dropZone.classList.remove("drag"); }
 });
 
 downloadBtn.addEventListener("click", downloadAll);
