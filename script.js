@@ -545,12 +545,27 @@ async function loadImages(files) {
 function downloadAll() {
   if (!images.length || isExporting) return;
 
+  // ensure every card has a real blob URL before proceeding
+  const links = [...previewGrid.querySelectorAll("a.card-dl-btn")];
+  if (links.some(a => !a.href || a.href === location.href || a.href === "#")) {
+    setStatus("Still preparing images — please wait a moment and try again.");
+    return;
+  }
+
   isExporting = true;
   downloadBtn.disabled = true;
   downloadLabel.textContent = "Downloading…";
 
-  const links = [...previewGrid.querySelectorAll("a.card-dl-btn")];
-  links.forEach(a => a.click());
+  links.forEach((a, i) => {
+    setTimeout(() => {
+      const tmp = document.createElement("a");
+      tmp.href     = a.href;
+      tmp.download = a.download;
+      document.body.appendChild(tmp);
+      tmp.click();
+      document.body.removeChild(tmp);
+    }, i * 300);
+  });
 
   setTimeout(() => {
     isExporting = false;
