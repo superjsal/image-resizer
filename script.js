@@ -269,9 +269,17 @@ function drawCropped(bitmap, w, h, targetCtx, targetCanvas, anchor = DEFAULT_ANC
       stepCtx.drawImage(tmp, 0, 0);
       stepW = nextW;
       stepH = nextH;
+      // FIX 1: Explicitly release tmp's backing store immediately after use
+      // instead of waiting for GC, which may leave GPU memory allocated for
+      // multiple full-resolution buffers simultaneously on large images.
+      tmp.width  = 0;
+      tmp.height = 0;
     }
 
     targetCtx.drawImage(step, 0, 0, stepW, stepH, 0, 0, w, h);
+    // FIX 1 (cont.): Release the step canvas backing store too once we're done with it.
+    step.width  = 0;
+    step.height = 0;
   } else {
     // Small reduction — single pass is fine
     targetCtx.drawImage(bitmap, sx, sy, cropW, cropH, 0, 0, w, h);
@@ -282,6 +290,11 @@ async function bitmapToObjectURL(bitmap, w, h, quality, anchor = DEFAULT_ANCHOR)
   const off = document.createElement("canvas");
   drawCropped(bitmap, w, h, off.getContext("2d"), off, anchor);
   const blob = await new Promise(r => off.toBlob(r, activeFormat.mime, activeFormat.mime === "image/png" ? undefined : quality));
+  // FIX 2: Release the offscreen canvas backing store after toBlob resolves.
+  // Previously this canvas was just abandoned, leaving its pixel buffer in
+  // memory until GC — which browsers (especially Chrome) may defer significantly.
+  off.width  = 0;
+  off.height = 0;
   return blob ? URL.createObjectURL(blob) : null;
 }
 
@@ -378,11 +391,15 @@ async function refreshCard(imageIndex) {
       drawCropped(item.bitmap, tW, tH, thumb.getContext("2d"), thumb, item.cropAnchor);
     }
 
-    // Revoke old blob and bake a new one
     const dlBtn = card.querySelector("a.card-dl-btn");
     if (dlBtn) {
-      if (dlBtn.href.startsWith("blob:")) URL.revokeObjectURL(dlBtn.href);
+      // FIX 3: Capture the old URL *before* the await so that rapid successive
+      // calls to refreshCard can't race past this check. If we read dlBtn.href
+      // after the await, a concurrent call may have already swapped in a new URL,
+      // causing the original one to be leaked (never revoked).
+      const oldHref = dlBtn.href.startsWith("blob:") ? dlBtn.href : null;
       const url = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
+      if (oldHref) URL.revokeObjectURL(oldHref);
       if (url) dlBtn.href = url;
     }
   }
@@ -393,7 +410,17 @@ async function refreshCard(imageIndex) {
   }
 }
 
+// FIX 4: Render token to guard against concurrent renderGrid calls.
+// When the user rapidly changes size, quality, or format, multiple renderGrid
+// calls can be in-flight simultaneously. Without this, a stale render completing
+// after a newer one will skip revokeGrid (which already ran for the new render),
+// permanently leaking those blob URLs. Each call increments the token; any
+// in-flight work that finds its token stale revokes its own URL and bails out.
+let renderToken = 0;
+
 async function renderGrid() {
+  const token = ++renderToken;
+
   revokeGrid();
   previewGrid.innerHTML = "";
 
@@ -472,6 +499,13 @@ async function renderGrid() {
   await Promise.all(pendingBtns.map(async btn => {
     const item = images[parseInt(btn.dataset.imgIdx)];
     const url  = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
+    // FIX 4 (cont.): If a newer renderGrid call has since started, this render
+    // is stale. Revoke the URL we just created rather than assigning it to a
+    // button that may have already been replaced or cleared.
+    if (renderToken !== token) {
+      if (url) URL.revokeObjectURL(url);
+      return;
+    }
     if (url) btn.href = url;
   }));
 }
