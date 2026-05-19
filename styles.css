@@ -600,12 +600,34 @@ body.indigo .theme-toggle .icon-star{ display:block; }
  display:grid;
  place-items:center;
  opacity:0;
+ z-index:10;
  transition:opacity 0.12s, background 0.12s, color 0.12s; }
 .preview-item:hover .card-remove{ opacity:1; }
 .card-remove:hover{ background:var(--red-dim); border-color:var(--red); color:var(--red); }
 
 .card-info{ margin-bottom:6px; }
 .filename{ font-size:13px; color:var(--text-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.filename-edit{ width:100%;
+ background:transparent;
+ border:1px solid transparent;
+ border-radius:4px;
+ padding:1px 4px;
+ margin:-1px -4px;
+ color:var(--text-2);
+ font-size:13px;
+ font-family:var(--font);
+ white-space:nowrap;
+ overflow:hidden;
+ text-overflow:ellipsis;
+ cursor:text;
+ transition:border-color 0.12s, background 0.12s, color 0.12s;
+ outline:none; }
+.filename-edit:hover{ border-color:var(--border-mid); background:var(--surface-3); }
+.filename-edit:focus{ border-color:var(--amber);
+ background:var(--surface-3);
+ color:var(--text);
+ box-shadow:0 0 0 2px var(--amber-ring); }
 .src-dims{ font-size:13px; color:var(--text-3); margin-top:2px; font-variant-numeric:tabular-nums; }
 
 .card-dl-btn{ display:flex;

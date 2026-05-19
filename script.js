@@ -95,6 +95,11 @@ function cleanName(name) {
     .replace(/^-|-$/g, "") || "image";
 }
 
+function getFilename(item) {
+  const base = item.customName.trim() ? cleanName(item.customName.trim()) : cleanName(item.name);
+  return base + "." + activeFormat.ext;
+}
+
 function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
 
 function setActivePreset(btn) {
@@ -144,7 +149,6 @@ function loadRecents() {
 
 function saveRecentSize(w, h) {
   let recents = loadRecents();
-  // Remove any existing entry with the same dimensions, then prepend
   recents = recents.filter(r => !(r.w === w && r.h === h));
   recents.unshift({ w, h });
   recents = recents.slice(0, MAX_RECENTS);
@@ -211,8 +215,6 @@ function setStatus(msg, state = "idle") {
 
 // --- Canvas drawing ---
 
-// Returns the source crop rect for a bitmap scaled to fill w×h at a given anchor.
-// Shared by drawCropped and getSlack so the math never diverges.
 function getCropRect(bitmap, w, h, anchor = DEFAULT_ANCHOR) {
   const scale = Math.max(w / bitmap.width, h / bitmap.height);
   const cropW = Math.round(w / scale);
@@ -242,7 +244,6 @@ function drawCropped(bitmap, w, h, targetCtx, targetCanvas, anchor = DEFAULT_ANC
 
   // Only step if reducing by more than 2x in either dimension
   if (cropW > w * 2 || cropH > h * 2) {
-    // Draw the cropped region into a working canvas at full crop size
     let stepW = cropW;
     let stepH = cropH;
     const step = document.createElement("canvas");
@@ -253,8 +254,9 @@ function drawCropped(bitmap, w, h, targetCtx, targetCanvas, anchor = DEFAULT_ANC
     step.height = stepH;
     stepCtx.drawImage(bitmap, sx, sy, cropW, cropH, 0, 0, stepW, stepH);
 
-    // Halve repeatedly until within 2x of the final target
-    while (stepW * 0.5 >= w && stepH * 0.5 >= h) {
+    // Halve repeatedly until both dimensions are within 2x of the final target.
+    // Uses || so neither axis gets a single-pass >2x resample (fixes && early-exit bug).
+    while (stepW * 0.5 >= w || stepH * 0.5 >= h) {
       const nextW = Math.round(stepW * 0.5);
       const nextH = Math.round(stepH * 0.5);
       const tmp = document.createElement("canvas");
@@ -269,19 +271,14 @@ function drawCropped(bitmap, w, h, targetCtx, targetCanvas, anchor = DEFAULT_ANC
       stepCtx.drawImage(tmp, 0, 0);
       stepW = nextW;
       stepH = nextH;
-      // FIX 1: Explicitly release tmp's backing store immediately after use
-      // instead of waiting for GC, which may leave GPU memory allocated for
-      // multiple full-resolution buffers simultaneously on large images.
       tmp.width  = 0;
       tmp.height = 0;
     }
 
     targetCtx.drawImage(step, 0, 0, stepW, stepH, 0, 0, w, h);
-    // FIX 1 (cont.): Release the step canvas backing store too once we're done with it.
     step.width  = 0;
     step.height = 0;
   } else {
-    // Small reduction — single pass is fine
     targetCtx.drawImage(bitmap, sx, sy, cropW, cropH, 0, 0, w, h);
   }
 }
@@ -290,9 +287,6 @@ async function bitmapToObjectURL(bitmap, w, h, quality, anchor = DEFAULT_ANCHOR)
   const off = document.createElement("canvas");
   drawCropped(bitmap, w, h, off.getContext("2d"), off, anchor);
   const blob = await new Promise(r => off.toBlob(r, activeFormat.mime, activeFormat.mime === "image/png" ? undefined : quality));
-  // FIX 2: Release the offscreen canvas backing store after toBlob resolves.
-  // Previously this canvas was just abandoned, leaving its pixel buffer in
-  // memory until GC — which browsers (especially Chrome) may defer significantly.
   off.width  = 0;
   off.height = 0;
   return blob ? URL.createObjectURL(blob) : null;
@@ -312,8 +306,8 @@ async function updatePreview() {
   drawCropped(item.bitmap, activeSize.w, activeSize.h, ctx, canvas, item.cropAnchor);
   canvas.style.opacity = "1";
   canvasEmpty.classList.add("hidden");
-  renderRecentSizes();
-canvasBadge.textContent = `${activeSize.w} × ${activeSize.h}`;
+  // FIX: removed misplaced renderRecentSizes() call — only needed when sizes change
+  canvasBadge.textContent = `${activeSize.w} × ${activeSize.h}`;
   canvasBadge.classList.add("visible");
 
   await renderGrid();
@@ -325,13 +319,9 @@ canvasBadge.textContent = `${activeSize.w} × ${activeSize.h}`;
 
 // --- Thumbnail grid ---
 
-// Inline SVG strings for dynamically-built card buttons.
-// lucide.createIcons() only works on static HTML, not innerHTML, so these stay as SVG strings.
 const svgDownload = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
 const svgCheck    = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
-// Computes positional slack on each axis for an image at the current output size.
-// If cropW >= bitmap.width there is no horizontal slack (left = center = right).
 function getSlack(bitmap) {
   const { w, h } = activeSize;
   const { cropW, cropH } = getCropRect(bitmap, w, h);
@@ -341,8 +331,6 @@ function getSlack(bitmap) {
   };
 }
 
-// Builds the 3x3 anchor picker overlay, pinned to the bottom-right of the thumbnail.
-// Dots on a locked axis are dimmed so users can see at a glance what moves.
 function buildAnchorPicker(imageIndex) {
   const item = images[imageIndex];
   const { hasH, hasV } = getSlack(item.bitmap);
@@ -352,7 +340,6 @@ function buildAnchorPicker(imageIndex) {
 
   ANCHORS.forEach(a => {
     const dot = document.createElement("button");
-    // Dim dots that sit on a locked axis
     const hLocked = !hasH && a.x !== 0.5;
     const vLocked = !hasV && a.y !== 0.5;
     dot.className = "anchor-dot" + (hLocked || vLocked ? " axis-dim" : "");
@@ -376,12 +363,10 @@ function buildAnchorPicker(imageIndex) {
   return wrap;
 }
 
-// Refreshes a single card's thumbnail + download blob without re-rendering the whole grid.
 async function refreshCard(imageIndex) {
   const item = images[imageIndex];
   const { w, h } = activeSize;
 
-  // Re-draw the thumbnail canvas in this card
   const card = previewGrid.children[imageIndex];
   if (card) {
     const thumb = card.querySelector("canvas");
@@ -393,10 +378,6 @@ async function refreshCard(imageIndex) {
 
     const dlBtn = card.querySelector("a.card-dl-btn");
     if (dlBtn) {
-      // FIX 3: Capture the old URL *before* the await so that rapid successive
-      // calls to refreshCard can't race past this check. If we read dlBtn.href
-      // after the await, a concurrent call may have already swapped in a new URL,
-      // causing the original one to be leaked (never revoked).
       const oldHref = dlBtn.href.startsWith("blob:") ? dlBtn.href : null;
       const url = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
       if (oldHref) URL.revokeObjectURL(oldHref);
@@ -404,18 +385,11 @@ async function refreshCard(imageIndex) {
     }
   }
 
-  // Also update the main preview canvas if this is the selected image
   if (imageIndex === selectedIndex) {
     drawCropped(item.bitmap, activeSize.w, activeSize.h, ctx, canvas, item.cropAnchor);
   }
 }
 
-// FIX 4: Render token to guard against concurrent renderGrid calls.
-// When the user rapidly changes size, quality, or format, multiple renderGrid
-// calls can be in-flight simultaneously. Without this, a stale render completing
-// after a newer one will skip revokeGrid (which already ran for the new render),
-// permanently leaking those blob URLs. Each call increments the token; any
-// in-flight work that finds its token stale revokes its own URL and bails out.
 let renderToken = 0;
 
 async function renderGrid() {
@@ -453,17 +427,34 @@ async function renderGrid() {
     overlay.className   = "thumb-overlay";
     overlay.textContent = "Click to preview";
 
-    // Anchor picker lives on the thumbnail so you're pointing at the area you want
     const anchorPicker = buildAnchorPicker(i);
     thumbWrap.append(thumb, overlay, anchorPicker);
     thumbWrap.addEventListener("click", () => { selectedIndex = i; updatePreview(); });
 
-    const info   = document.createElement("div");
+    const info = document.createElement("div");
     info.className = "card-info";
 
-    const nameEl = document.createElement("div");
-    nameEl.className   = "filename";
-    nameEl.textContent = item.name;
+    // FIX: dlBtn declared before commitName so the closure holds a direct reference
+    // rather than re-querying previewGrid.children[i], which may be stale after a re-render.
+    let dlBtn;
+
+    const nameEl = document.createElement("input");
+    nameEl.type         = "text";
+    nameEl.className    = "filename filename-edit";
+    nameEl.value        = item.customName || cleanName(item.name);
+    nameEl.title        = "Click to rename";
+    nameEl.spellcheck   = false;
+    nameEl.autocomplete = "off";
+
+    const commitName = () => {
+      const val = nameEl.value.trim();
+      images[i].customName = val;
+      nameEl.value = val || cleanName(item.name);
+      if (dlBtn) dlBtn.download = getFilename(images[i]);
+    };
+    nameEl.addEventListener("blur",    commitName);
+    nameEl.addEventListener("keydown", e => { if (e.key === "Enter") nameEl.blur(); });
+    nameEl.addEventListener("click",   e => e.stopPropagation());
 
     const dimsEl = document.createElement("div");
     dimsEl.className   = "src-dims";
@@ -471,10 +462,10 @@ async function renderGrid() {
 
     info.append(nameEl, dimsEl);
 
-    const dlBtn = document.createElement("a");
+    dlBtn = document.createElement("a");
     dlBtn.className      = "card-dl-btn";
     dlBtn.href           = "#";
-    dlBtn.download       = cleanName(item.name) + "." + activeFormat.ext;
+    dlBtn.download       = getFilename(item);
     dlBtn.dataset.objurl = "1";
     dlBtn.dataset.imgIdx = String(i);
     dlBtn.innerHTML      = svgDownload + " Save";
@@ -495,13 +486,9 @@ async function renderGrid() {
     previewGrid.appendChild(wrap);
   }
 
-  // Encode all blobs in parallel — much faster with multiple images
   await Promise.all(pendingBtns.map(async btn => {
     const item = images[parseInt(btn.dataset.imgIdx)];
     const url  = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
-    // FIX 4 (cont.): If a newer renderGrid call has since started, this render
-    // is stale. Revoke the URL we just created rather than assigning it to a
-    // button that may have already been replaced or cleared.
     if (renderToken !== token) {
       if (url) URL.revokeObjectURL(url);
       return;
@@ -513,7 +500,8 @@ async function renderGrid() {
 
 // --- Remove a single image ---
 
-function removeImage(index) {
+// FIX: async + await so rapid removes can't race against updatePreview's 60ms yield
+async function removeImage(index) {
   images[index].bitmap.close();
   images.splice(index, 1);
 
@@ -524,7 +512,7 @@ function removeImage(index) {
   }
 
   if (selectedIndex >= images.length) selectedIndex = images.length - 1;
-  updatePreview();
+  await updatePreview();
 }
 
 
@@ -560,11 +548,10 @@ async function loadImages(files) {
   setStep(2);
   setStatus(`Loading ${files.length} image${plural(files.length)}…`, "busy");
 
-  // Decode all files in parallel — much faster when loading multiple images at once
   const results = await Promise.all(
     files.map(file =>
       createImageBitmap(file)
-        .then(bitmap => ({ bitmap, name: file.name, cropAnchor: { ...DEFAULT_ANCHOR } }))
+        .then(bitmap => ({ bitmap, name: file.name, customName: "", cropAnchor: { ...DEFAULT_ANCHOR } }))
         .catch(() => { console.warn("Skipped unreadable file:", file.name); return null; })
     )
   );
@@ -579,7 +566,6 @@ async function loadImages(files) {
 function downloadAll() {
   if (!images.length || isExporting) return;
 
-  // ensure every card has a real blob URL before proceeding
   const links = [...previewGrid.querySelectorAll("a.card-dl-btn")];
   if (links.some(a => !a.href || a.href === location.href || a.href === "#")) {
     setStatus("Still preparing images — please wait a moment and try again.");
@@ -665,7 +651,7 @@ document.querySelectorAll(".quality-btn").forEach(btn => {
     activeQuality = parseFloat(btn.dataset.quality);
     qualityHint.textContent = qualityHints[btn.dataset.quality];
     savePrefs();
-    if (images.length) updatePreview();
+    if (images.length) renderGrid();
   });
 });
 
@@ -739,7 +725,6 @@ document.addEventListener("keydown", e => {
 
 const THEMES = ["dark", "light", "indigo"];
 
-// Inline SVG icons (Lucide style) for each theme state shown in the toggle button
 const THEME_ICONS = {
   dark:   `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`,
   light:  `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`,
@@ -784,7 +769,6 @@ document.querySelectorAll(".quality-btn").forEach(btn => {
   if (match) qualityHint.textContent = qualityHints[btn.dataset.quality];
 });
 
-// Restore format button active state from saved prefs
 document.querySelectorAll(".format-btn").forEach(btn => {
   const match = "image/" + btn.dataset.format === activeFormat.mime;
   btn.classList.toggle("active", match);
