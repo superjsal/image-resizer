@@ -521,7 +521,10 @@ async function renderGrid() {
   }
 
   await Promise.all(pendingBtns.map(async btn => {
+
+    if (renderToken !== token) return;
     const item = images[parseInt(btn.dataset.imgIdx)];
+    if (!item) return;                             // resetUI() cleared images[] mid-render
     const url  = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
     if (renderToken !== token) {
       if (url) URL.revokeObjectURL(url);
