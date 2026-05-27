@@ -43,6 +43,10 @@ let selectedIndex = 0;
 let isExporting   = false;
 let pendingFiles  = null;
 
+
+let loadGeneration = 0;                      
+const cardRefreshTokens = new Map();         
+
 const qualityHints = {
   "0.7":  "Smallest file size, some compression visible",
   "0.85": "Good balance of size and quality",
@@ -74,6 +78,11 @@ function revokeGrid() {
 }
 
 function resetUI() {
+  // Increment before closing bitmaps so any in-flight renderGrid / refreshCard
+  // calls detect the invalidation and discard their results rather than trying
+  // to use already-closed bitmaps.
+  renderToken++;
+  cardRefreshTokens.clear();
   revokeGrid();
   images.forEach(item => item.bitmap.close());
   images = [];
@@ -285,11 +294,19 @@ function drawCropped(bitmap, w, h, targetCtx, targetCanvas, anchor = DEFAULT_ANC
 
 async function bitmapToObjectURL(bitmap, w, h, quality, anchor = DEFAULT_ANCHOR) {
   const off = document.createElement("canvas");
-  drawCropped(bitmap, w, h, off.getContext("2d"), off, anchor);
-  const blob = await new Promise(r => off.toBlob(r, activeFormat.mime, activeFormat.mime === "image/png" ? undefined : quality));
-  off.width  = 0;
-  off.height = 0;
-  return blob ? URL.createObjectURL(blob) : null;
+  try {
+    drawCropped(bitmap, w, h, off.getContext("2d"), off, anchor);
+    const blob = await new Promise(r => off.toBlob(r, activeFormat.mime, activeFormat.mime === "image/png" ? undefined : quality));
+    return blob ? URL.createObjectURL(blob) : null;
+  } catch {
+    // bitmap may have been closed mid-render (e.g. removeImage / resetUI raced);
+    // return null so callers treat this image as a no-op rather than crashing.
+    return null;
+  } finally {
+    // Always free the offscreen canvas backing store, success or failure.
+    off.width  = 0;
+    off.height = 0;
+  }
 }
 
 
@@ -364,6 +381,10 @@ function buildAnchorPicker(imageIndex) {
 }
 
 async function refreshCard(imageIndex) {
+
+  const myToken = (cardRefreshTokens.get(imageIndex) ?? 0) + 1;
+  cardRefreshTokens.set(imageIndex, myToken);
+
   const item = images[imageIndex];
   const { w, h } = activeSize;
 
@@ -380,6 +401,13 @@ async function refreshCard(imageIndex) {
     if (dlBtn) {
       const oldHref = dlBtn.href.startsWith("blob:") ? dlBtn.href : null;
       const url = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
+
+
+      if (cardRefreshTokens.get(imageIndex) !== myToken) {
+        if (url) URL.revokeObjectURL(url);
+        return;
+      }
+
       if (oldHref) URL.revokeObjectURL(oldHref);
       if (url) dlBtn.href = url;
     }
@@ -395,6 +423,8 @@ let renderToken = 0;
 async function renderGrid() {
   const token = ++renderToken;
 
+
+  cardRefreshTokens.clear();
   revokeGrid();
   previewGrid.innerHTML = "";
 
@@ -470,11 +500,15 @@ async function renderGrid() {
     dlBtn.dataset.imgIdx = String(i);
     dlBtn.innerHTML      = svgDownload + " Save";
 
+    let savedTimer1 = null;
+    let savedTimer2 = null;
     dlBtn.addEventListener("click", () => {
-      setTimeout(() => {
+      clearTimeout(savedTimer1);
+      clearTimeout(savedTimer2);
+      savedTimer1 = setTimeout(() => {
         dlBtn.innerHTML = svgCheck + " Saved!";
         dlBtn.classList.add("saved");
-        setTimeout(() => {
+        savedTimer2 = setTimeout(() => {
           dlBtn.innerHTML = svgDownload + " Save";
           dlBtn.classList.remove("saved");
         }, 3000);
@@ -545,6 +579,7 @@ function processFiles(files, addToExisting) {
 }
 
 async function loadImages(files) {
+  const gen = ++loadGeneration;
   setStep(2);
   setStatus(`Loading ${files.length} image${plural(files.length)}…`, "busy");
 
@@ -555,8 +590,14 @@ async function loadImages(files) {
         .catch(() => { console.warn("Skipped unreadable file:", file.name); return null; })
     )
   );
-  images.push(...results.filter(Boolean));
 
+
+  if (gen !== loadGeneration) {
+    results.forEach(r => r?.bitmap.close());
+    return;
+  }
+
+  images.push(...results.filter(Boolean));
   await updatePreview();
 }
 
