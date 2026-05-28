@@ -14,6 +14,7 @@ const statusDot     = document.getElementById("statusDot");
 const statusBar     = document.getElementById("status");
 const canvasEmpty   = document.getElementById("canvasEmpty");
 const canvasBadge   = document.getElementById("canvasBadge");
+const cropHint      = document.getElementById("cropHint");
 const canvas        = document.getElementById("out");
 const previewGrid   = document.getElementById("previewGrid");
 const gridHeader    = document.getElementById("gridHeader");
@@ -53,20 +54,17 @@ const qualityHints = {
   "0.92": "Sharp output, larger file size",
 };
 
-// Crop anchor positions — label, x (0–1), y (0–1)
-const ANCHORS = [
-  { label: "Top left",     x: 0,   y: 0   },
-  { label: "Top center",   x: 0.5, y: 0   },
-  { label: "Top right",    x: 1,   y: 0   },
-  { label: "Left",         x: 0,   y: 0.5 },
-  { label: "Center",       x: 0.5, y: 0.5 },
-  { label: "Right",        x: 1,   y: 0.5 },
-  { label: "Bottom left",  x: 0,   y: 1   },
-  { label: "Bottom center",x: 0.5, y: 1   },
-  { label: "Bottom right", x: 1,   y: 1   },
-];
-
+// Crop anchor is a continuous position: x (0–1) and y (0–1).
+// 0,0 = top-left   0.5,0.5 = center   1,1 = bottom-right.
+// The draggable crop box in the main preview sets this directly.
 const DEFAULT_ANCHOR = { x: 0.5, y: 0.5 };
+
+// Device pixel ratio for crisp editor rendering.
+const DPR = Math.max(1, window.devicePixelRatio || 1);
+
+// Geometry of the live crop editor, recomputed on every draw (all values in CSS px).
+const cropEditor = { img: null, box: null, axis: null };
+let cropDragging = false;
 
 
 // --- Helpers ---
@@ -89,9 +87,11 @@ function resetUI() {
   previewGrid.innerHTML = "";
   gridHeader.style.display = "none";
   loadChoice.style.display = "none";
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   canvasEmpty.classList.remove("hidden");
   canvasBadge.classList.remove("visible");
+  if (cropHint) cropHint.classList.remove("visible");
   downloadBtn.disabled = true;
   setStep(1);
 }
@@ -319,8 +319,8 @@ async function updatePreview() {
   canvas.style.opacity = "0.5";
   await new Promise(r => setTimeout(r, 60));
 
-  const item = images[selectedIndex];
-  drawCropped(item.bitmap, activeSize.w, activeSize.h, ctx, canvas, item.cropAnchor);
+  if (selectedIndex >= images.length) selectedIndex = images.length - 1;
+  drawCropEditor();
   canvas.style.opacity = "1";
   canvasEmpty.classList.add("hidden");
   // FIX: removed misplaced renderRecentSizes() call — only needed when sizes change
@@ -348,37 +348,173 @@ function getSlack(bitmap) {
   };
 }
 
-function buildAnchorPicker(imageIndex) {
-  const item = images[imageIndex];
-  const { hasH, hasV } = getSlack(item.bitmap);
+// Fraction of the source the crop window covers on each axis (one will be 1.0).
+function cropFractions(bitmap) {
+  const { w, h } = activeSize;
+  const { cropW, cropH } = getCropRect(bitmap, w, h);
+  return { fw: cropW / bitmap.width, fh: cropH / bitmap.height };
+}
 
-  const wrap = document.createElement("div");
-  wrap.className = "anchor-picker";
+// Draws the selected source image "contained" in the canvas, dims the area that
+// will be cropped away, and outlines the crop window. Records geometry for dragging.
+function drawCropEditor() {
+  if (!images.length) return;
+  const item = images[selectedIndex];
+  const bmp  = item.bitmap;
 
-  ANCHORS.forEach(a => {
-    const dot = document.createElement("button");
-    const hLocked = !hasH && a.x !== 0.5;
-    const vLocked = !hasV && a.y !== 0.5;
-    dot.className = "anchor-dot" + (hLocked || vLocked ? " axis-dim" : "");
-    dot.title = a.label + (!hasH && !hasV ? " (fully locked)" : hLocked ? " (H locked)" : vLocked ? " (V locked)" : "");
+  // Match backing store to the displayed size (× DPR) for a sharp preview.
+  const cssW = canvas.clientWidth  || canvas.parentElement.clientWidth || 320;
+  const cssH = canvas.clientHeight || 230;
+  canvas.width  = Math.round(cssW * DPR);
+  canvas.height = Math.round(cssH * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
 
-    const currentAnchor = item.cropAnchor;
-    if (a.x === currentAnchor.x && a.y === currentAnchor.y) dot.classList.add("active");
+  // Contain-fit the whole source image.
+  const fs = Math.min(cssW / bmp.width, cssH / bmp.height);
+  const iw = bmp.width  * fs;
+  const ih = bmp.height * fs;
+  const ix = (cssW - iw) / 2;
+  const iy = (cssH - ih) / 2;
 
-    dot.addEventListener("click", e => {
-      e.stopPropagation();
-      images[imageIndex].cropAnchor = { x: a.x, y: a.y };
-      wrap.querySelectorAll(".anchor-dot").forEach((d, di) => {
-        d.classList.toggle("active", ANCHORS[di].x === a.x && ANCHORS[di].y === a.y);
-      });
-      refreshCard(imageIndex);
-    });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, ix, iy, iw, ih);
 
-    wrap.appendChild(dot);
+  // Crop window position from the continuous anchor.
+  const { fw, fh } = cropFractions(bmp);
+  const boxW = iw * fw;
+  const boxH = ih * fh;
+  const boxX = ix + (iw - boxW) * item.cropAnchor.x;
+  const boxY = iy + (ih - boxH) * item.cropAnchor.y;
+
+  // Dim everything inside the image except the crop window (even-odd hole).
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.beginPath();
+  ctx.rect(ix, iy, iw, ih);
+  ctx.rect(boxX, boxY, boxW, boxH);
+  ctx.fill("evenodd");
+  ctx.restore();
+
+  // Rule-of-thirds guides inside the window.
+  ctx.strokeStyle = "rgba(255,255,255,0.3)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 3; i++) {
+    const gx = boxX + boxW * (i / 3);
+    ctx.beginPath(); ctx.moveTo(gx, boxY); ctx.lineTo(gx, boxY + boxH); ctx.stroke();
+    const gy = boxY + boxH * (i / 3);
+    ctx.beginPath(); ctx.moveTo(boxX, gy); ctx.lineTo(boxX + boxW, gy); ctx.stroke();
+  }
+
+  // Crop window border + corner ticks.
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(boxX + 1, boxY + 1, boxW - 2, boxH - 2);
+  ctx.lineWidth = 3;
+  const t = Math.min(16, boxW / 3, boxH / 3);
+  const corners = [
+    [boxX, boxY, 1, 1], [boxX + boxW, boxY, -1, 1],
+    [boxX, boxY + boxH, 1, -1], [boxX + boxW, boxY + boxH, -1, -1],
+  ];
+  corners.forEach(([cx, cy, dx, dy]) => {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + dy * t); ctx.lineTo(cx, cy); ctx.lineTo(cx + dx * t, cy);
+    ctx.stroke();
   });
 
-  return wrap;
+  const slack = getSlack(bmp);
+  const axis  = slack.hasH ? "x" : slack.hasV ? "y" : null;
+
+  cropEditor.img  = { ix, iy, iw, ih };
+  cropEditor.box  = { x: boxX, y: boxY, w: boxW, h: boxH };
+  cropEditor.axis = axis;
+
+  canvas.style.cursor = axis ? (cropDragging ? "grabbing" : "grab") : "default";
+
+  if (cropHint) {
+    cropHint.textContent = axis
+      ? (axis === "x" ? "Drag the box left / right to reposition the crop"
+                      : "Drag the box up / down to reposition the crop")
+      : "Image already matches the output ratio — nothing to crop";
+    cropHint.classList.add("visible");
+  }
+  canvasEmpty.classList.add("hidden");
 }
+
+// Lightweight redraw of just one card's thumbnail (no blob regen) — used during drag.
+function liveThumb(i) {
+  const card = previewGrid.children[i];
+  if (!card) return;
+  const thumb = card.querySelector("canvas");
+  if (!thumb) return;
+  const tW = thumb.offsetWidth || 160;
+  const tH = Math.round(tW * (activeSize.h / activeSize.w));
+  drawCropped(images[i].bitmap, tW, tH, thumb.getContext("2d"), thumb, images[i].cropAnchor);
+}
+
+// --- Crop box dragging (mouse + touch via pointer events) ---
+
+function pointInBox(px, py) {
+  const b = cropEditor.box;
+  return b && px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h;
+}
+
+let dragRafPending = false;
+let lastPointer = null;
+
+canvas.addEventListener("pointerdown", e => {
+  if (!images.length || !cropEditor.axis) return;
+  const r  = canvas.getBoundingClientRect();
+  const px = e.clientX - r.left;
+  const py = e.clientY - r.top;
+  if (!pointInBox(px, py)) return;
+  cropDragging = true;
+  try { canvas.setPointerCapture(e.pointerId); } catch {}
+  canvas.style.cursor = "grabbing";
+});
+
+canvas.addEventListener("pointermove", e => {
+  if (!cropDragging) return;
+  lastPointer = e;
+  if (dragRafPending) return;
+  dragRafPending = true;
+  requestAnimationFrame(() => {
+    dragRafPending = false;
+    const ev = lastPointer;
+    if (!ev || !cropEditor.img) return;
+    const r  = canvas.getBoundingClientRect();
+    const px = ev.clientX - r.left;
+    const py = ev.clientY - r.top;
+    const { ix, iy, iw, ih } = cropEditor.img;
+    const b = cropEditor.box;
+    const item = images[selectedIndex];
+    if (cropEditor.axis === "x" && iw - b.w > 0) {
+      item.cropAnchor = { x: clamp((px - b.w / 2 - ix) / (iw - b.w), 0, 1), y: item.cropAnchor.y };
+    } else if (cropEditor.axis === "y" && ih - b.h > 0) {
+      item.cropAnchor = { x: item.cropAnchor.x, y: clamp((py - b.h / 2 - iy) / (ih - b.h), 0, 1) };
+    }
+    drawCropEditor();          // cheap overlay redraw
+    liveThumb(selectedIndex);  // cheap thumbnail redraw (final blob comes on release)
+  });
+});
+
+function endCropDrag(e) {
+  if (!cropDragging) return;
+  cropDragging = false;
+  try { canvas.releasePointerCapture(e.pointerId); } catch {}
+  canvas.style.cursor = cropEditor.axis ? "grab" : "default";
+  refreshCard(selectedIndex);  // regenerate the download blob at full quality
+}
+canvas.addEventListener("pointerup", endCropDrag);
+canvas.addEventListener("pointercancel", endCropDrag);
+
+// Crop box geometry depends on the canvas's rendered width, so redraw on resize.
+let cropResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(cropResizeTimer);
+  cropResizeTimer = setTimeout(() => { if (images.length) drawCropEditor(); }, 120);
+});
 
 async function refreshCard(imageIndex) {
 
@@ -414,7 +550,7 @@ async function refreshCard(imageIndex) {
   }
 
   if (imageIndex === selectedIndex) {
-    drawCropped(item.bitmap, activeSize.w, activeSize.h, ctx, canvas, item.cropAnchor);
+    drawCropEditor();
   }
 }
 
@@ -455,10 +591,9 @@ async function renderGrid() {
 
     const overlay = document.createElement("div");
     overlay.className   = "thumb-overlay";
-    overlay.textContent = "Click to preview";
+    overlay.textContent = "Click to edit crop";
 
-    const anchorPicker = buildAnchorPicker(i);
-    thumbWrap.append(thumb, overlay, anchorPicker);
+    thumbWrap.append(thumb, overlay);
     thumbWrap.addEventListener("click", () => { selectedIndex = i; updatePreview(); });
 
     const info = document.createElement("div");

@@ -10,7 +10,7 @@ A lightweight, browser-based tool for resizing and exporting images in bulk for 
 - **Bulk resize** — load multiple images at once and export them all in one click
 - **Preset sizes** — one-click presets for common formats (LP Default 1200×628, SayNetwork 640×420)
 - **Custom dimensions** — enter any width/height up to 20,000px
-- **Crop anchor picker** — a 3×3 dot grid on each thumbnail lets you control exactly where the crop is taken from (top-left, center, bottom-right, etc.) per image
+- **Draggable crop box** — the main preview shows your full image with a movable crop window. Drag it along whichever axis has extra room to control exactly what's kept; the dimmed area is what gets cropped off. Each image keeps its own crop position.
 - **Quality control** — Low / Med / High JPEG compression settings (Suggest to keep it on High as 99% of the time we are downscaling.)
 - **Live preview** — full-size canvas preview updates instantly when you change size, quality, or crop anchor
 - **Individual save** — download any single image straight from its card
@@ -41,7 +41,7 @@ image-resizer/
 
 1. **Pick a size** — choose a preset or enter custom dimensions and hit Apply
 2. **Load images** — drag & drop or click to browse. Adding more images while some are loaded will ask whether to replace or add
-3. **Adjust crop anchors** — hover any card to reveal the 3×3 picker in the corner. Dimmed dots mean that axis has no slack (the image already fills it completely)
+3. **Adjust the crop** — click any thumbnail to load it into the main preview, then drag the crop box to reposition it. If the box can't move, the image already matches the output ratio and there's nothing to crop
 4. **Export** — hit Download All or save individual images from their cards
 
 Ideally best used as a Sidebar if doing a lot of Blogs. You can just use the Recent Download History to drag the downloaded images over from the SEOTOOL tab over to the resizer tab. I like to save adobe stock images as the file name LP wants first.
@@ -72,11 +72,11 @@ No JS changes needed.
 
 ## How Cropping Works
 
-Images are always scaled to **fill** the output size completely (no letterboxing). When the source aspect ratio doesn't match the target, the excess is cropped. The anchor picker controls which part of the image is kept:
+Images are always scaled to **fill** the output size completely (no letterboxing). When the source aspect ratio doesn't match the target, the excess is cropped. Drag the crop box in the main preview to choose which part is kept:
 
-- The **center dot** (default) crops from the middle
-- The **top-left dot** keeps the top-left corner
-- **Dimmed dots** mean that axis is fully covered and you will not be able to crop.
+- By **default** the crop is centered
+- Drag toward any edge to keep that side of the image
+- If the box **won't move**, that means the image already fills the output ratio on both axes, so there's nothing to crop
 
 ---
 
