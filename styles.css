@@ -501,7 +501,7 @@ body.indigo .theme-toggle .icon-star{ display:block; }
  overflow:hidden;
  background:var(--surface-2);
  border:1px solid var(--border);
- height:340px;
+ height:300px;
  box-shadow:var(--shadow-inset); }
 .canvas-wrap canvas{ display:block; width:100%; height:100%; touch-action:none; user-select:none; -webkit-user-select:none; }
 
