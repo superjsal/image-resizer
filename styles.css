@@ -501,7 +501,7 @@ body.indigo .theme-toggle .icon-star{ display:block; }
  overflow:hidden;
  background:var(--surface-2);
  border:1px solid var(--border);
- height:230px;
+ height:380px;
  box-shadow:var(--shadow-inset); }
 .canvas-wrap canvas{ display:block; width:100%; height:100%; touch-action:none; user-select:none; -webkit-user-select:none; }
 
@@ -536,24 +536,26 @@ body.indigo .theme-toggle .icon-star{ display:block; }
  transition:opacity 0.2s; }
 .canvas-badge.visible{ opacity:1; }
 
-.crop-hint{ position:absolute;
- top:7px;
- left:50%;
- transform:translateX(-50%);
- padding:3px 10px;
- border-radius:20px;
- background:rgba(0,0,0,0.6);
- backdrop-filter:blur(8px);
- border:1px solid rgba(255,255,255,0.10);
+.crop-hint{ display:flex;
+ align-items:center;
+ justify-content:center;
+ gap:6px;
+ margin-top:6px;
+ padding:0 4px;
+ min-height:16px;
  font-size:11px;
  font-weight:500;
  letter-spacing:0.01em;
- color:rgba(255,255,255,0.85);
- white-space:nowrap;
- pointer-events:none;
+ color:var(--text-3);
  opacity:0;
  transition:opacity 0.2s; }
 .crop-hint.visible{ opacity:1; }
+.crop-hint::before{ content:"";
+ width:5px;
+ height:5px;
+ border-radius:50%;
+ background:var(--text-3);
+ opacity:0.55; }
 
 .grid-header{ display:flex;
  align-items:center;
