@@ -45,8 +45,7 @@ let isExporting   = false;
 let pendingFiles  = null;
 
 
-let loadGeneration = 0;                      
-const cardRefreshTokens = new Map();         
+let loadGeneration = 0;
 
 const qualityHints = {
   "0.7":  "Smallest file size, some compression visible",
@@ -71,18 +70,10 @@ let cropDragging = false;
 
 const plural = (n) => n !== 1 ? "s" : "";
 
-function revokeGrid() {
-  previewGrid.querySelectorAll("a[data-objurl]").forEach(a => URL.revokeObjectURL(a.href));
-}
-
 function resetUI() {
-  // Increment before closing bitmaps so any in-flight renderGrid / refreshCard
-  // calls detect the invalidation and discard their results rather than trying
-  // to use already-closed bitmaps.
-  renderToken++;
-  cardRefreshTokens.clear();
-  revokeGrid();
-  images.forEach(item => item.bitmap.close());
+  // freeItem revokes cached blob URLs and closes bitmaps; any in-flight
+  // ensureBlob call self-invalidates because the item is no longer in images[].
+  images.forEach(freeItem);
   images = [];
   previewGrid.innerHTML = "";
   gridHeader.style.display = "none";
@@ -310,6 +301,43 @@ async function bitmapToObjectURL(bitmap, w, h, quality, anchor = DEFAULT_ANCHOR)
 }
 
 
+// --- Lazy blob cache ---
+//
+// Blobs are no longer encoded eagerly on every render. Each image caches its
+// last encoded object URL plus a key describing the settings it was encoded
+// with. ensureBlob() returns the cached URL when the key still matches, and
+// re-encodes only when size / quality / format / crop anchor actually changed.
+
+function blobKey(item) {
+  return `${activeSize.w}x${activeSize.h}|${activeQuality}|${activeFormat.mime}|${item.cropAnchor.x.toFixed(4)},${item.cropAnchor.y.toFixed(4)}`;
+}
+
+async function ensureBlob(item) {
+  const key = blobKey(item);
+  if (item.blobUrl && item.blobKey === key) return item.blobUrl;
+
+  const url = await bitmapToObjectURL(item.bitmap, activeSize.w, activeSize.h, activeQuality, item.cropAnchor);
+  if (!url) return null;
+
+  // The image may have been removed, or settings changed, while encoding.
+  if (!images.includes(item)) { URL.revokeObjectURL(url); return null; }
+  if (blobKey(item) !== key)  { URL.revokeObjectURL(url); return ensureBlob(item); }
+
+  if (item.blobUrl) URL.revokeObjectURL(item.blobUrl);
+  item.blobUrl = url;
+  item.blobKey = key;
+  return url;
+}
+
+// Frees everything an image holds (bitmap + cached blob URL).
+function freeItem(item) {
+  item.bitmap.close();
+  if (item.blobUrl) URL.revokeObjectURL(item.blobUrl);
+  item.blobUrl = null;
+  item.blobKey = null;
+}
+
+
 // --- Preview ---
 
 async function updatePreview() {
@@ -504,7 +532,7 @@ function endCropDrag(e) {
   cropDragging = false;
   try { canvas.releasePointerCapture(e.pointerId); } catch {}
   canvas.style.cursor = cropEditor.axis ? "grab" : "default";
-  refreshCard(selectedIndex);  // regenerate the download blob at full quality
+  refreshCard(selectedIndex);  // redraw thumb; blob re-encodes lazily on next save
 }
 canvas.addEventListener("pointerup", endCropDrag);
 canvas.addEventListener("pointercancel", endCropDrag);
@@ -516,12 +544,10 @@ window.addEventListener("resize", () => {
   cropResizeTimer = setTimeout(() => { if (images.length) drawCropEditor(); }, 120);
 });
 
-async function refreshCard(imageIndex) {
 
-  const myToken = (cardRefreshTokens.get(imageIndex) ?? 0) + 1;
-  cardRefreshTokens.set(imageIndex, myToken);
-
+function refreshCard(imageIndex) {
   const item = images[imageIndex];
+  if (!item) return;
   const { w, h } = activeSize;
 
   const card = previewGrid.children[imageIndex];
@@ -532,21 +558,6 @@ async function refreshCard(imageIndex) {
       const tH = Math.round(tW * (h / w));
       drawCropped(item.bitmap, tW, tH, thumb.getContext("2d"), thumb, item.cropAnchor);
     }
-
-    const dlBtn = card.querySelector("a.card-dl-btn");
-    if (dlBtn) {
-      const oldHref = dlBtn.href.startsWith("blob:") ? dlBtn.href : null;
-      const url = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
-
-
-      if (cardRefreshTokens.get(imageIndex) !== myToken) {
-        if (url) URL.revokeObjectURL(url);
-        return;
-      }
-
-      if (oldHref) URL.revokeObjectURL(oldHref);
-      if (url) dlBtn.href = url;
-    }
   }
 
   if (imageIndex === selectedIndex) {
@@ -554,14 +565,15 @@ async function refreshCard(imageIndex) {
   }
 }
 
-let renderToken = 0;
+// Refreshes each card's download filename (e.g. after a format change).
+function updateCardFilenames() {
+  [...previewGrid.children].forEach((card, i) => {
+    const dlBtn = card.querySelector("a.card-dl-btn");
+    if (dlBtn && images[i]) dlBtn.download = getFilename(images[i]);
+  });
+}
 
-async function renderGrid() {
-  const token = ++renderToken;
-
-
-  cardRefreshTokens.clear();
-  revokeGrid();
+function renderGrid() {
   previewGrid.innerHTML = "";
 
   if (!images.length) { gridHeader.style.display = "none"; return; }
@@ -569,7 +581,6 @@ async function renderGrid() {
 
   const { w, h } = activeSize;
 
-  const pendingBtns = [];
   for (let i = 0; i < images.length; i++) {
     const item = images[i];
     const wrap = document.createElement("div");
@@ -599,8 +610,7 @@ async function renderGrid() {
     const info = document.createElement("div");
     info.className = "card-info";
 
-    // FIX: dlBtn declared before commitName so the closure holds a direct reference
-    // rather than re-querying previewGrid.children[i], which may be stale after a re-render.
+
     let dlBtn;
 
     const nameEl = document.createElement("input");
@@ -631,13 +641,11 @@ async function renderGrid() {
     dlBtn.className      = "card-dl-btn";
     dlBtn.href           = "#";
     dlBtn.download       = getFilename(item);
-    dlBtn.dataset.objurl = "1";
-    dlBtn.dataset.imgIdx = String(i);
     dlBtn.innerHTML      = svgDownload + " Save";
 
     let savedTimer1 = null;
     let savedTimer2 = null;
-    dlBtn.addEventListener("click", () => {
+    const showSaved = () => {
       clearTimeout(savedTimer1);
       clearTimeout(savedTimer2);
       savedTimer1 = setTimeout(() => {
@@ -648,25 +656,34 @@ async function renderGrid() {
           dlBtn.classList.remove("saved");
         }, 3000);
       }, 200);
+    };
+
+    dlBtn.addEventListener("click", async e => {
+      // Ignore clicks while an encode for this card is already running.
+      if (dlBtn.dataset.busy) { e.preventDefault(); return; }
+
+      // Fresh cached blob already wired to the link — let the download proceed.
+      if (item.blobUrl && item.blobKey === blobKey(item) && dlBtn.href === item.blobUrl) {
+        dlBtn.download = getFilename(item);
+        showSaved();
+        return;
+      }
+
+      // Stale or missing blob: block this click (otherwise href="#" would
+      // download the page itself), encode, then re-click with the real URL.
+      e.preventDefault();
+      dlBtn.dataset.busy = "1";
+      const url = await ensureBlob(item);
+      delete dlBtn.dataset.busy;
+      if (!url) { setStatus("Couldn't prepare that image — try again."); return; }
+      dlBtn.href     = url;
+      dlBtn.download = getFilename(item);
+      dlBtn.click();   // re-entrant click now takes the fresh path above
     });
 
-    pendingBtns.push(dlBtn);
     wrap.append(removeBtn, thumbWrap, info, dlBtn);
     previewGrid.appendChild(wrap);
   }
-
-  await Promise.all(pendingBtns.map(async btn => {
-
-    if (renderToken !== token) return;
-    const item = images[parseInt(btn.dataset.imgIdx)];
-    if (!item) return;                             // resetUI() cleared images[] mid-render
-    const url  = await bitmapToObjectURL(item.bitmap, w, h, activeQuality, item.cropAnchor);
-    if (renderToken !== token) {
-      if (url) URL.revokeObjectURL(url);
-      return;
-    }
-    if (url) btn.href = url;
-  }));
 }
 
 
@@ -674,7 +691,7 @@ async function renderGrid() {
 
 // FIX: async + await so rapid removes can't race against updatePreview's 60ms yield
 async function removeImage(index) {
-  images[index].bitmap.close();
+  freeItem(images[index]);
   images.splice(index, 1);
 
   if (!images.length) {
@@ -708,8 +725,7 @@ function processFiles(files, addToExisting) {
   loadChoice.style.display = "none";
 
   if (!addToExisting) {
-    revokeGrid();
-    images.forEach(item => item.bitmap.close());
+    images.forEach(freeItem);
     images = [];
   }
 
@@ -742,24 +758,35 @@ async function loadImages(files) {
 
 // --- Download all ---
 
-function downloadAll() {
+async function downloadAll() {
   if (!images.length || isExporting) return;
-
-  const links = [...previewGrid.querySelectorAll("a.card-dl-btn")];
-  if (links.some(a => !a.href || a.href === location.href || a.href === "#")) {
-    setStatus("Still preparing images — please wait a moment and try again.");
-    return;
-  }
 
   isExporting = true;
   downloadBtn.disabled = true;
+  downloadLabel.textContent = "Preparing…";
+
+  // Encode (or reuse cached blobs for) every image at current settings.
+  const files = [];
+  for (const item of images) {
+    const url = await ensureBlob(item);
+    if (url) files.push({ url, name: getFilename(item) });
+  }
+
+  if (!files.length) {
+    isExporting = false;
+    downloadBtn.disabled = false;
+    downloadLabel.textContent = "Download All";
+    setStatus("Nothing could be exported — try reloading the images.");
+    return;
+  }
+
   downloadLabel.textContent = "Downloading…";
 
-  links.forEach((a, i) => {
+  files.forEach((f, i) => {
     setTimeout(() => {
       const tmp = document.createElement("a");
-      tmp.href     = a.href;
-      tmp.download = a.download;
+      tmp.href     = f.url;
+      tmp.download = f.name;
       document.body.appendChild(tmp);
       tmp.click();
       document.body.removeChild(tmp);
@@ -770,8 +797,8 @@ function downloadAll() {
     isExporting = false;
     downloadBtn.disabled = false;
     downloadLabel.textContent = "Download All";
-    setStatus(`Done · ${images.length} image${plural(images.length)} exported`, "active");
-  }, links.length * 300 + 500);
+    setStatus(`Done · ${files.length} image${plural(files.length)} exported`, "active");
+  }, files.length * 300 + 500);
 }
 
 
@@ -830,7 +857,7 @@ document.querySelectorAll(".quality-btn").forEach(btn => {
     activeQuality = parseFloat(btn.dataset.quality);
     qualityHint.textContent = qualityHints[btn.dataset.quality];
     savePrefs();
-    if (images.length) renderGrid();
+    
   });
 });
 
@@ -884,7 +911,7 @@ document.querySelectorAll(".format-btn").forEach(btn => {
     activeFormat = { mime: "image/" + btn.dataset.format, ext: btn.dataset.ext };
     document.getElementById("formatHint").textContent = formatHints[activeFormat.mime];
     savePrefs();
-    if (images.length) renderGrid();
+    updateCardFilenames();  // extension changed; blobs re-encode lazily on save
   });
 });
 downloadBtn.addEventListener("click", downloadAll);
