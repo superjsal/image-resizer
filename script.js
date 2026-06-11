@@ -53,15 +53,13 @@ const qualityHints = {
   "0.92": "Sharp output, larger file size",
 };
 
-// Crop anchor is a continuous position: x (0–1) and y (0–1).
-// 0,0 = top-left   0.5,0.5 = center   1,1 = bottom-right.
-// The draggable crop box in the main preview sets this directly.
+
 const DEFAULT_ANCHOR = { x: 0.5, y: 0.5 };
 
-// Device pixel ratio for crisp editor rendering.
+
 const DPR = Math.max(1, window.devicePixelRatio || 1);
 
-// Geometry of the live crop editor, recomputed on every draw (all values in CSS px).
+
 const cropEditor = { img: null, box: null, axis: null };
 let cropDragging = false;
 
@@ -71,8 +69,9 @@ let cropDragging = false;
 const plural = (n) => n !== 1 ? "s" : "";
 
 function resetUI() {
-  // freeItem revokes cached blob URLs and closes bitmaps; any in-flight
-  // ensureBlob call self-invalidates because the item is no longer in images[].
+
+  prewarmToken++;
+  clearTimeout(prewarmTimer);
   images.forEach(freeItem);
   images = [];
   previewGrid.innerHTML = "";
@@ -288,25 +287,19 @@ async function bitmapToObjectURL(bitmap, w, h, quality, anchor = DEFAULT_ANCHOR)
   try {
     drawCropped(bitmap, w, h, off.getContext("2d"), off, anchor);
     const blob = await new Promise(r => off.toBlob(r, activeFormat.mime, activeFormat.mime === "image/png" ? undefined : quality));
-    return blob ? URL.createObjectURL(blob) : null;
+    return blob ? { url: URL.createObjectURL(blob), size: blob.size } : null;
   } catch {
-    // bitmap may have been closed mid-render (e.g. removeImage / resetUI raced);
-    // return null so callers treat this image as a no-op rather than crashing.
+
     return null;
   } finally {
-    // Always free the offscreen canvas backing store, success or failure.
+
     off.width  = 0;
     off.height = 0;
   }
 }
 
 
-// --- Lazy blob cache ---
-//
-// Blobs are no longer encoded eagerly on every render. Each image caches its
-// last encoded object URL plus a key describing the settings it was encoded
-// with. ensureBlob() returns the cached URL when the key still matches, and
-// re-encodes only when size / quality / format / crop anchor actually changed.
+
 
 function blobKey(item) {
   return `${activeSize.w}x${activeSize.h}|${activeQuality}|${activeFormat.mime}|${item.cropAnchor.x.toFixed(4)},${item.cropAnchor.y.toFixed(4)}`;
@@ -316,25 +309,95 @@ async function ensureBlob(item) {
   const key = blobKey(item);
   if (item.blobUrl && item.blobKey === key) return item.blobUrl;
 
-  const url = await bitmapToObjectURL(item.bitmap, activeSize.w, activeSize.h, activeQuality, item.cropAnchor);
-  if (!url) return null;
 
-  // The image may have been removed, or settings changed, while encoding.
-  if (!images.includes(item)) { URL.revokeObjectURL(url); return null; }
-  if (blobKey(item) !== key)  { URL.revokeObjectURL(url); return ensureBlob(item); }
+  if (item.blobPending) {
+    await item.blobPending.catch(() => {});
+    return ensureBlob(item);
+  }
 
-  if (item.blobUrl) URL.revokeObjectURL(item.blobUrl);
-  item.blobUrl = url;
-  item.blobKey = key;
-  return url;
+  item.blobPending = (async () => {
+    const res = await bitmapToObjectURL(item.bitmap, activeSize.w, activeSize.h, activeQuality, item.cropAnchor);
+    if (!res) return null;
+
+
+    if (!images.includes(item)) { URL.revokeObjectURL(res.url); return null; }
+    if (blobKey(item) !== key)  { URL.revokeObjectURL(res.url); return null; }
+
+    if (item.blobUrl) URL.revokeObjectURL(item.blobUrl);
+    item.blobUrl  = res.url;
+    item.blobSize = res.size;
+    item.blobKey  = key;
+    return res.url;
+  })();
+
+  try {
+    const url = await item.blobPending;
+
+    if (url === null && images.includes(item) && blobKey(item) !== key) {
+      item.blobPending = null;
+      return ensureBlob(item);
+    }
+    return url;
+  } finally {
+    item.blobPending = null;
+  }
 }
 
 // Frees everything an image holds (bitmap + cached blob URL).
 function freeItem(item) {
   item.bitmap.close();
   if (item.blobUrl) URL.revokeObjectURL(item.blobUrl);
-  item.blobUrl = null;
-  item.blobKey = null;
+  item.blobUrl  = null;
+  item.blobKey  = null;
+  item.blobSize = null;
+}
+
+let prewarmToken = 0;
+let prewarmTimer = null;
+
+const whenIdle = (fn) => ("requestIdleCallback" in window)
+  ? requestIdleCallback(fn, { timeout: 1500 })
+  : setTimeout(fn, 200);
+
+function prewarmBlobs() {
+  const token = ++prewarmToken;
+  const queue = [...images];
+
+  const next = () => {
+    if (token !== prewarmToken || !queue.length) return;
+    const item = queue.shift();
+    if (!images.includes(item)) { whenIdle(next); return; }
+    ensureBlob(item).then(() => {
+      if (token !== prewarmToken) return;
+      updateCardMeta();
+      whenIdle(next);
+    });
+  };
+  whenIdle(next);
+}
+
+
+function schedulePrewarm(delay = 400) {
+  clearTimeout(prewarmTimer);
+  prewarmTimer = setTimeout(prewarmBlobs, delay);
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024)    return bytes + " B";
+  if (bytes < 1048576) return (bytes / 1024).toFixed(bytes < 102400 ? 1 : 0) + " KB";
+  return (bytes / 1048576).toFixed(2) + " MB";
+}
+
+
+function updateCardMeta() {
+  [...previewGrid.children].forEach((card, i) => {
+    const item = images[i];
+    if (!item) return;
+    const sizeEl = card.querySelector(".file-size");
+    if (!sizeEl) return;
+    const fresh = item.blobUrl && item.blobKey === blobKey(item);
+    sizeEl.textContent = fresh && item.blobSize ? formatBytes(item.blobSize) : "…";
+  });
 }
 
 
@@ -356,6 +419,8 @@ async function updatePreview() {
   canvasBadge.classList.add("visible");
 
   await renderGrid();
+  updateCardMeta();
+  schedulePrewarm(150);
   downloadBtn.disabled = false;
   setStep(3);
   setStatus(`${activeSize.w} × ${activeSize.h}  ·  ${images.length} image${plural(images.length)}`, "active");
@@ -462,8 +527,8 @@ function drawCropEditor() {
 
   if (cropHint) {
     cropHint.textContent = axis
-      ? (axis === "x" ? "Drag the box left / right to reposition the crop"
-                      : "Drag the box up / down to reposition the crop")
+      ? (axis === "x" ? "Drag the box or press ← → to reposition the crop (Shift = bigger steps)"
+                      : "Drag the box or press ↑ ↓ to reposition the crop (Shift = bigger steps)")
       : "Image already matches the output ratio — nothing to crop";
     cropHint.classList.add("visible");
   }
@@ -497,6 +562,7 @@ canvas.addEventListener("pointerdown", e => {
   const px = e.clientX - r.left;
   const py = e.clientY - r.top;
   if (!pointInBox(px, py)) return;
+  canvas.focus({ preventScroll: true });
   cropDragging = true;
   try { canvas.setPointerCapture(e.pointerId); } catch {}
   canvas.style.cursor = "grabbing";
@@ -522,8 +588,8 @@ canvas.addEventListener("pointermove", e => {
     } else if (cropEditor.axis === "y" && ih - b.h > 0) {
       item.cropAnchor = { x: item.cropAnchor.x, y: clamp((py - b.h / 2 - iy) / (ih - b.h), 0, 1) };
     }
-    drawCropEditor();          // cheap overlay redraw
-    liveThumb(selectedIndex);  // cheap thumbnail redraw (final blob comes on release)
+    drawCropEditor();          
+    liveThumb(selectedIndex);  
   });
 });
 
@@ -532,10 +598,48 @@ function endCropDrag(e) {
   cropDragging = false;
   try { canvas.releasePointerCapture(e.pointerId); } catch {}
   canvas.style.cursor = cropEditor.axis ? "grab" : "default";
-  refreshCard(selectedIndex);  // redraw thumb; blob re-encodes lazily on next save
+  refreshCard(selectedIndex);   
+  updateCardMeta();
+  schedulePrewarm(600);
 }
 canvas.addEventListener("pointerup", endCropDrag);
 canvas.addEventListener("pointercancel", endCropDrag);
+
+
+canvas.addEventListener("keydown", e => {
+  if (!images.length || !cropEditor.axis) return;
+
+  const item = images[selectedIndex];
+  const step = e.shiftKey ? 0.1 : 0.02;
+  const a    = { ...item.cropAnchor };
+  let handled = true;
+
+  if (cropEditor.axis === "x") {
+    switch (e.key) {
+      case "ArrowLeft":  a.x = clamp(a.x - step, 0, 1); break;
+      case "ArrowRight": a.x = clamp(a.x + step, 0, 1); break;
+      case "Home":       a.x = 0; break;
+      case "End":        a.x = 1; break;
+      default: handled = false;
+    }
+  } else {
+    switch (e.key) {
+      case "ArrowUp":   a.y = clamp(a.y - step, 0, 1); break;
+      case "ArrowDown": a.y = clamp(a.y + step, 0, 1); break;
+      case "Home":      a.y = 0; break;
+      case "End":       a.y = 1; break;
+      default: handled = false;
+    }
+  }
+  if (!handled) return;
+
+  e.preventDefault();
+  item.cropAnchor = a;
+  drawCropEditor();
+  liveThumb(selectedIndex);
+  updateCardMeta();
+  schedulePrewarm(800);
+});
 
 // Crop box geometry depends on the canvas's rendered width, so redraw on resize.
 let cropResizeTimer = null;
@@ -605,6 +709,15 @@ function renderGrid() {
     overlay.textContent = "Click to edit crop";
 
     thumbWrap.append(thumb, overlay);
+
+    // Source smaller than output on either axis → result will be upscaled.
+    if (item.bitmap.width < w || item.bitmap.height < h) {
+      const warn = document.createElement("div");
+      warn.className   = "thumb-warn";
+      warn.textContent = "⚠ Upscaled";
+      warn.title       = `Source (${item.bitmap.width} × ${item.bitmap.height}) is smaller than the output (${w} × ${h}) — result will look soft`;
+      thumbWrap.appendChild(warn);
+    }
     thumbWrap.addEventListener("click", () => { selectedIndex = i; updatePreview(); });
 
     const info = document.createElement("div");
@@ -632,8 +745,13 @@ function renderGrid() {
     nameEl.addEventListener("click",   e => e.stopPropagation());
 
     const dimsEl = document.createElement("div");
-    dimsEl.className   = "src-dims";
-    dimsEl.textContent = `${item.bitmap.width} × ${item.bitmap.height}`;
+    dimsEl.className = "src-dims";
+    const srcSpan = document.createElement("span");
+    srcSpan.textContent = `${item.bitmap.width} × ${item.bitmap.height}`;
+    const sizeEl = document.createElement("span");
+    sizeEl.className = "file-size";
+    sizeEl.title     = "Output file size at current settings";
+    dimsEl.append(srcSpan, sizeEl);
 
     info.append(nameEl, dimsEl);
 
@@ -857,6 +975,8 @@ document.querySelectorAll(".quality-btn").forEach(btn => {
     activeQuality = parseFloat(btn.dataset.quality);
     qualityHint.textContent = qualityHints[btn.dataset.quality];
     savePrefs();
+    updateCardMeta();        // sizes are stale at the new quality → show pending
+    schedulePrewarm();
     
   });
 });
@@ -885,17 +1005,33 @@ fileInput.addEventListener("change", e => {
 
 dropZone.addEventListener("click", () => fileInput.click());
 
+
+
 let dragDepth = 0;
-dropZone.addEventListener("dragenter", e => { e.preventDefault(); dragDepth++; dropZone.classList.add("drag"); });
-dropZone.addEventListener("dragover",  e => { e.preventDefault(); });
-dropZone.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; dropZone.classList.remove("drag"); } });
-dropZone.addEventListener("drop", e => {
+const dragHasFiles = e => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+
+document.addEventListener("dragenter", e => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  dropZone.classList.add("drag");
+});
+document.addEventListener("dragover", e => {
+  if (dragHasFiles(e)) e.preventDefault(); 
+});
+document.addEventListener("dragleave", e => {
+  if (--dragDepth <= 0 || !e.relatedTarget) {
+    dragDepth = 0;
+    dropZone.classList.remove("drag");
+  }
+});
+document.addEventListener("drop", e => {
+  if (!dragHasFiles(e)) return;
   e.preventDefault();
   dragDepth = 0;
   dropZone.classList.remove("drag");
-  if (e.dataTransfer?.files?.length) handleFileInput(e.dataTransfer.files);
+  if (e.dataTransfer.files?.length) handleFileInput(e.dataTransfer.files);
 });
-document.addEventListener("dragleave", e => { if (!e.relatedTarget) { dragDepth = 0; dropZone.classList.remove("drag"); } });
 
 
 // ── Format selector ──────────────────────────────────────────────────────────
@@ -911,7 +1047,9 @@ document.querySelectorAll(".format-btn").forEach(btn => {
     activeFormat = { mime: "image/" + btn.dataset.format, ext: btn.dataset.ext };
     document.getElementById("formatHint").textContent = formatHints[activeFormat.mime];
     savePrefs();
-    updateCardFilenames();  // extension changed; blobs re-encode lazily on save
+    updateCardFilenames();   
+    updateCardMeta();        
+    schedulePrewarm();
   });
 });
 downloadBtn.addEventListener("click", downloadAll);

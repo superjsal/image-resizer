@@ -648,7 +648,19 @@ body.indigo .theme-toggle .icon-star{ display:block; }
  background:var(--surface-3);
  color:var(--text);
  box-shadow:0 0 0 2px var(--amber-ring); }
-.src-dims{ font-size:13px; color:var(--text-3); margin-top:2px; font-variant-numeric:tabular-nums; }
+.src-dims{ font-size:13px; color:var(--text-3); margin-top:2px; font-variant-numeric:tabular-nums;
+  display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.file-size{ font-variant-numeric:tabular-nums; white-space:nowrap; }
+.file-size:empty{ display:none; }
+
+/* Upscale warning badge on thumbnails */
+.thumb-warn{ position:absolute; top:6px; left:6px; z-index:2; padding:2px 7px;
+  border-radius:5px; font-size:10.5px; font-weight:600; letter-spacing:.2px;
+  background:var(--amber); color:#1a1208; pointer-events:none;
+  box-shadow:0 1px 4px rgba(0,0,0,0.35); }
+
+/* Keyboard focus on the crop canvas */
+.canvas-wrap canvas:focus-visible{ outline:2px solid var(--amber); outline-offset:-2px; border-radius:inherit; }
 
 .card-dl-btn{ display:flex;
  align-items:center;

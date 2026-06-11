@@ -19,7 +19,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <!-- Lucide icons -->
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script src="https://unpkg.com/lucide@1.17.0/dist/umd/lucide.min.js"
+          integrity="sha384-bdZtphetAEBgkGZvhZXOFDWc55tHGLqaSo1f4qZtgvEiolEBqlJ9u6FTk+CoLfj0"
+          crossorigin="anonymous"></script>
 </head>
 <body>
   <div class="app">
@@ -157,7 +159,7 @@
         <i data-lucide="image" width="28" height="28" stroke-width="1.2" class="canvas-empty-icon"></i>
         <span>No preview yet</span>
       </div>
-      <canvas id="out"></canvas>
+      <canvas id="out" tabindex="0" aria-label="Crop preview — use arrow keys to reposition the crop"></canvas>
       <div class="canvas-badge" id="canvasBadge"></div>
     </div>
     <div class="crop-hint" id="cropHint"></div>
