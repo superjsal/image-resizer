@@ -26,6 +26,7 @@ const choiceCancel  = document.getElementById("choiceCancel");
 const kbdHint       = document.getElementById("kbdHint");
 const qualityHint   = document.getElementById("qualityHint");
 const recentSizes   = document.getElementById("recentSizes");
+const originalBtn   = document.getElementById("originalBtn");
 const themeToggle   = document.getElementById("themeToggle");
 const ctx           = canvas.getContext("2d");
 
@@ -38,6 +39,7 @@ const steps = [
 // App state
 let images        = [];
 let activeSize    = { w: 1200, h: 628 };
+let keepOriginal  = false;   // "Original" mode: keep each image's own dimensions, convert format only
 let activeQuality = 0.92;
 let activeFormat  = { mime: "image/jpeg", ext: "jpg" };
 let selectedIndex = 0;
@@ -67,6 +69,16 @@ let cropDragging = false;
 // --- Helpers ---
 
 const plural = (n) => n !== 1 ? "s" : "";
+
+// Output dimensions for a given image. In Original mode every image keeps its
+// own native size (which makes the crop a full-frame pass-through); otherwise
+// everything uses the shared activeSize.
+function outSizeForBitmap(bitmap) {
+  return keepOriginal ? { w: bitmap.width, h: bitmap.height } : activeSize;
+}
+function outSizeFor(item) {
+  return outSizeForBitmap(item.bitmap);
+}
 
 function resetUI() {
 
@@ -119,6 +131,7 @@ function savePrefs() {
     localStorage.setItem("resizer-size",    JSON.stringify(activeSize));
     localStorage.setItem("resizer-quality", String(activeQuality));
     localStorage.setItem("resizer-format",  JSON.stringify(activeFormat));
+    localStorage.setItem("resizer-original", keepOriginal ? "1" : "0");
   } catch {}
 }
 
@@ -132,6 +145,8 @@ function loadPrefs() {
 
     const fmt = JSON.parse(localStorage.getItem("resizer-format"));
     if (fmt?.mime && fmt?.ext) activeFormat = fmt;
+
+    keepOriginal = localStorage.getItem("resizer-original") === "1";
   } catch {}
 }
 
@@ -302,7 +317,8 @@ async function bitmapToObjectURL(bitmap, w, h, quality, anchor = DEFAULT_ANCHOR)
 
 
 function blobKey(item) {
-  return `${activeSize.w}x${activeSize.h}|${activeQuality}|${activeFormat.mime}|${item.cropAnchor.x.toFixed(4)},${item.cropAnchor.y.toFixed(4)}`;
+  const { w, h } = outSizeFor(item);
+  return `${keepOriginal ? "orig" : "fit"}|${w}x${h}|${activeQuality}|${activeFormat.mime}|${item.cropAnchor.x.toFixed(4)},${item.cropAnchor.y.toFixed(4)}`;
 }
 
 async function ensureBlob(item) {
@@ -316,7 +332,8 @@ async function ensureBlob(item) {
   }
 
   item.blobPending = (async () => {
-    const res = await bitmapToObjectURL(item.bitmap, activeSize.w, activeSize.h, activeQuality, item.cropAnchor);
+    const out = outSizeFor(item);
+    const res = await bitmapToObjectURL(item.bitmap, out.w, out.h, activeQuality, item.cropAnchor);
     if (!res) return null;
 
 
@@ -415,7 +432,9 @@ async function updatePreview() {
   canvas.style.opacity = "1";
   canvasEmpty.classList.add("hidden");
   // FIX: removed misplaced renderRecentSizes() call — only needed when sizes change
-  canvasBadge.textContent = `${activeSize.w} × ${activeSize.h}`;
+  canvasBadge.textContent = keepOriginal
+    ? `Original · ${images[selectedIndex].bitmap.width} × ${images[selectedIndex].bitmap.height}`
+    : `${activeSize.w} × ${activeSize.h}`;
   canvasBadge.classList.add("visible");
 
   await renderGrid();
@@ -423,7 +442,12 @@ async function updatePreview() {
   schedulePrewarm(150);
   downloadBtn.disabled = false;
   setStep(3);
-  setStatus(`${activeSize.w} × ${activeSize.h}  ·  ${images.length} image${plural(images.length)}`, "active");
+  setStatus(
+    keepOriginal
+      ? `Original sizes  ·  ${images.length} image${plural(images.length)}  ·  converting to ${activeFormat.ext.toUpperCase()}`
+      : `${activeSize.w} × ${activeSize.h}  ·  ${images.length} image${plural(images.length)}`,
+    "active"
+  );
 }
 
 
@@ -433,7 +457,7 @@ const svgDownload = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="
 const svgCheck    = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
 function getSlack(bitmap) {
-  const { w, h } = activeSize;
+  const { w, h } = outSizeForBitmap(bitmap);
   const { cropW, cropH } = getCropRect(bitmap, w, h);
   return {
     hasH: cropW < bitmap.width - 1,
@@ -443,7 +467,7 @@ function getSlack(bitmap) {
 
 // Fraction of the source the crop window covers on each axis (one will be 1.0).
 function cropFractions(bitmap) {
-  const { w, h } = activeSize;
+  const { w, h } = outSizeForBitmap(bitmap);
   const { cropW, cropH } = getCropRect(bitmap, w, h);
   return { fw: cropW / bitmap.width, fh: cropH / bitmap.height };
 }
@@ -526,7 +550,9 @@ function drawCropEditor() {
   canvas.style.cursor = axis ? (cropDragging ? "grabbing" : "grab") : "default";
 
   if (cropHint) {
-    cropHint.textContent = axis
+    cropHint.textContent = keepOriginal
+      ? "Original mode — image keeps its own size, format conversion only"
+      : axis
       ? (axis === "x" ? "Drag the box or press ← → to reposition the crop (Shift = bigger steps)"
                       : "Drag the box or press ↑ ↓ to reposition the crop (Shift = bigger steps)")
       : "Image already matches the output ratio — nothing to crop";
@@ -541,8 +567,9 @@ function liveThumb(i) {
   if (!card) return;
   const thumb = card.querySelector("canvas");
   if (!thumb) return;
+  const { w, h } = outSizeFor(images[i]);
   const tW = thumb.offsetWidth || 160;
-  const tH = Math.round(tW * (activeSize.h / activeSize.w));
+  const tH = Math.round(tW * (h / w));
   drawCropped(images[i].bitmap, tW, tH, thumb.getContext("2d"), thumb, images[i].cropAnchor);
 }
 
@@ -652,7 +679,7 @@ window.addEventListener("resize", () => {
 function refreshCard(imageIndex) {
   const item = images[imageIndex];
   if (!item) return;
-  const { w, h } = activeSize;
+  const { w, h } = outSizeFor(item);
 
   const card = previewGrid.children[imageIndex];
   if (card) {
@@ -683,10 +710,9 @@ function renderGrid() {
   if (!images.length) { gridHeader.style.display = "none"; return; }
   gridHeader.style.display = "flex";
 
-  const { w, h } = activeSize;
-
   for (let i = 0; i < images.length; i++) {
     const item = images[i];
+    const { w, h } = outSizeFor(item);
     const wrap = document.createElement("div");
     wrap.className = "preview-item" + (i === selectedIndex ? " selected" : "");
 
@@ -701,16 +727,18 @@ function renderGrid() {
 
     const thumb  = document.createElement("canvas");
     const thumbW = 160;
-    const thumbH = Math.round(h * (160 / w));
+    // Cap thumb height in Original mode so extreme portrait images don't blow up the grid.
+    const thumbH = Math.min(Math.round(h * (160 / w)), 240);
     drawCropped(item.bitmap, thumbW, thumbH, thumb.getContext("2d"), thumb, item.cropAnchor);
 
     const overlay = document.createElement("div");
     overlay.className   = "thumb-overlay";
-    overlay.textContent = "Click to edit crop";
+    overlay.textContent = keepOriginal ? "Click to preview" : "Click to edit crop";
 
     thumbWrap.append(thumb, overlay);
 
     // Source smaller than output on either axis → result will be upscaled.
+    // Never true in Original mode (output = source), so the warn is naturally skipped.
     if (item.bitmap.width < w || item.bitmap.height < h) {
       const warn = document.createElement("div");
       warn.className   = "thumb-warn";
@@ -923,8 +951,11 @@ async function downloadAll() {
 // --- Size ---
 
 function applySizeChange(w, h) {
+  keepOriginal = false;
   activeSize = { w, h };
   savePrefs();
+  updateCardMeta();      // cached blobs may be stale after leaving Original mode
+  schedulePrewarm();
   canvasBadge.textContent = `${w} × ${h}`;
   canvasBadge.classList.add("visible");
   if (images.length) {
@@ -932,6 +963,22 @@ function applySizeChange(w, h) {
   } else {
     setStep(1);
     setStatus(`Size set to ${w} × ${h}. Now load your images.`);
+  }
+}
+
+// "Original" mode — every image keeps its own dimensions; only the format
+function applyOriginalMode() {
+  keepOriginal = true;
+  savePrefs();
+  updateCardMeta();
+  schedulePrewarm();
+  canvasBadge.textContent = "Original sizes";
+  canvasBadge.classList.add("visible");
+  if (images.length) {
+    updatePreview();
+  } else {
+    setStep(1);
+    setStatus(`Original mode — images keep their sizes and export. Now load your images.`);
   }
 }
 
@@ -946,6 +993,14 @@ document.querySelectorAll("[data-size]").forEach(btn => {
     applySizeChange(w, h);
   });
 });
+
+if (originalBtn) {
+  originalBtn.addEventListener("click", () => {
+    setActivePreset(originalBtn);   // seg-btn class, so this clears the size presets too
+    clearInputError();
+    applyOriginalMode();
+  });
+}
 
 customBtn.addEventListener("click", () => {
   const w = clamp(parseInt(widthInput.value)  || 0, 32, 20000);
@@ -1122,22 +1177,28 @@ document.querySelectorAll(".format-btn").forEach(btn => {
   }
 });
 
-let presetRestored = false;
-document.querySelectorAll("[data-size]").forEach(btn => {
-  const [w, h] = btn.dataset.size.split("x").map(Number);
-  if (w === activeSize.w && h === activeSize.h) {
-    setActivePreset(btn);
-    presetRestored = true;
+if (keepOriginal) {
+  setActivePreset(originalBtn);
+} else {
+  let presetRestored = false;
+  document.querySelectorAll("[data-size]").forEach(btn => {
+    const [w, h] = btn.dataset.size.split("x").map(Number);
+    if (w === activeSize.w && h === activeSize.h) {
+      setActivePreset(btn);
+      presetRestored = true;
+    }
+  });
+  if (!presetRestored) {
+    setActivePreset(null);
+    widthInput.value  = activeSize.w;
+    heightInput.value = activeSize.h;
   }
-});
-if (!presetRestored) {
-  setActivePreset(null);
-  widthInput.value  = activeSize.w;
-  heightInput.value = activeSize.h;
 }
 
 renderRecentSizes();
-canvasBadge.textContent = `${activeSize.w} × ${activeSize.h}`;
+canvasBadge.textContent = keepOriginal ? "Original sizes" : `${activeSize.w} × ${activeSize.h}`;
 setStep(1);
-setStatus("Choose a size, then load your images.");
+setStatus(keepOriginal
+  ? "Original mode — load images to convert them at their own sizes."
+  : "Choose a size, then load your images.");
 downloadBtn.disabled = true;
