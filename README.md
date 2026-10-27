@@ -127,6 +127,12 @@ image-resizer/
     └── ui.js        Icons, status bar, step indicator, small helpers
 ```
 
+### Publishing an update
+
+The live site is served by GitHub Pages from the `main` branch, so merging or pushing to `main` updates it within a minute or two.
+
+Before publishing, open `index.html` and find-and-replace the version date (for example `v=2026-10-27`) with today's date. Every CSS and JavaScript link carries that version, so browsers fetch fresh files instead of mixing cached old ones with new ones. (GitHub Pages lets browsers keep files for about 10 minutes.) The HEIC decoder keeps its own version (`v=1.6.6`); only change it if you update the decoder.
+
 ### Adding a preset size
 
 In `index.html`, copy any `seg-btn` and set its `data-size` attribute:
